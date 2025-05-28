@@ -14,6 +14,8 @@ import { getClients, saveClients, getSessions, saveSessions } from "../utils/sto
 import { getSessionsForPackage, getDefaultPeriodForPackage, isIndividualPackageExpired } from "../utils/packageUtils";
 import { format, startOfWeek, addDays, parseISO, isValid, compareAsc } from "date-fns";
 
+const SESSION_BUFFER = 15;
+
 // --- Funções utilitárias ---
 
 function getTotalSessionsUsed(client, pkg, sessions) {
@@ -33,7 +35,7 @@ function getStoredTimeSlots() {
     const end = i === 5 ? 16 : 20; // Sábado até 16:10
     const slots = [];
     let minutes = start * 60;
-    const endMinutes = end * 60 + 10;
+    const endMinutes = end * 60 + SESSION_BUFFER;
     while (minutes <= endMinutes) {
       const hour = Math.floor(minutes / 60);
       const min = minutes % 60;
@@ -62,17 +64,15 @@ function setCustomSlotsForDate(date, slots) {
 // --------- END CUSTOM SLOTS --------
 
 function getSessionDurationWithBuffer(period) {
-  if (!period) return 70;
-  if (period === "30min") return 40;
-  if (period === "1h") return 70;
-  if (period === "1h30") return 100;
-  if (period === "2h") return 130;
+  if (period === "30min") return 30;
+  if (period === "1h")    return 60;
+  if (period === "1h30")  return 90;
+  if (period === "2h")    return 120;
   const match = period.match(/(\d+)h(?:(\d+))?/);
   if (match) {
-    let min = parseInt(match[1], 10) * 60 + (parseInt(match[2] || "0", 10));
-    return min + 10;
+    return parseInt(match[1],10)*60 + parseInt(match[2]||"0",10);
   }
-  return 70;
+  return 60;
 }
 function timeToMinutes(t) {
   const [h, m] = t.split(":").map(Number);
@@ -117,7 +117,7 @@ function getDefaultDaySlots(dow) {
   const end = dow === 5 ? 16 : 20; // Sábado até 16:10
   const slots = [];
   let minutes = start * 60;
-  const endMinutes = end * 60 + 10;
+  const endMinutes = end * 60 + 15;
   while (minutes <= endMinutes) {
     const hour = Math.floor(minutes / 60);
     const min = minutes % 60;
@@ -159,12 +159,13 @@ function getValidPeriodsForSlot(date, slot, sessions) {
   });
 }
 
+
 function getAvailableTimesForPeriod(date, sessions, _, period = "1h") {
   const d = new Date(date + "T00:00:00");
   const dow = d.getDay();
   if (dow === 0 || dow > 6) return [];
   const startExpediente = 480;
-  const endExpediente = [1210, 1210, 1210, 1210, 1210, 970][dow - 1];
+  const endExpediente = [1215, 1215, 1215, 1215, 1215, 975][dow - 1];
   const sessionDuration = getSessionDurationWithBuffer(period);
 
   // Sessões ordenadas
@@ -193,18 +194,18 @@ function getAvailableTimesForPeriod(date, sessions, _, period = "1h") {
     fillSlotsInInterval(startExpediente, endExpediente);
   } else {
     // Antes da primeira sessão
-    fillSlotsInInterval(startExpediente, daySessions[0].start - 10);
+    fillSlotsInInterval(startExpediente, daySessions[0].start - 15);
 
     // Entre as sessões
     for (let i = 0; i < daySessions.length - 1; i++) {
       const endCurr = daySessions[i].end;
       const startNext = daySessions[i + 1].start;
       // Janela livre é: [endCurr+10, startNext-10]
-      fillSlotsInInterval(endCurr + 10, startNext - 10);
+      fillSlotsInInterval(endCurr + 15, startNext - 15);
     }
 
     // Após a última sessão
-    fillSlotsInInterval(daySessions[daySessions.length - 1].end + 10, endExpediente);
+    fillSlotsInInterval(daySessions[daySessions.length - 1].end + 15, endExpediente);
   }
 
   // Adiciona horários personalizados, se houver para o dia
