@@ -163,59 +163,58 @@ function getValidPeriodsForSlot(date, slot, sessions) {
 function getAvailableTimesForPeriod(date, sessions, _, period = "1h") {
   const d = new Date(date + "T00:00:00");
   const dow = d.getDay();
-  if (dow === 0 || dow > 6) return [];
-  const startExpediente = 480;
-  const endExpediente = [
-      20*60 + SESSION_BUFFER,
-      20*60 + SESSION_BUFFER,
-      20*60 + SESSION_BUFFER,
-      20*60 + SESSION_BUFFER,
-      20*60 + SESSION_BUFFER,
-      16*60 + SESSION_BUFFER
-    ][dow - 1];
+  if (dow === 0 || dow > 6) return []; // No sessions on Sundays
+  const startExpediente = 480; // Start time in minutes (8:00 AM)
+  const endExpediente =
+    dow === 6 ? DEFAULT_END_SATURDAY : DEFAULT_END_WEEKDAY; // End time varies by day
+
   const sessionDuration = getSessionDurationWithBuffer(period);
 
-  // Sessões ordenadas
   const daySessions = sessions
-    .filter(s => s.date === date && (s.status === "scheduled" || s.status === "done"))
-    .map(s => ({
+    .filter((s) => s.date === date && (s.status === "scheduled" || s.status === "done"))
+    .map((s) => ({
       ...s,
       start: timeToMinutes(s.time),
-      end: timeToMinutes(s.time) + getSessionDurationWithBuffer(s.period)
+      end: timeToMinutes(s.time) + getSessionDurationWithBuffer(s.period),
     }))
     .sort((a, b) => a.start - b.start);
 
   let freeSlots = [];
 
-  // Função auxiliar para inserir slots em um intervalo de [start, end]
+  // Function to fill slots in a given interval
   function fillSlotsInInterval(windowStart, windowEnd) {
     let slot = windowStart;
     while (slot + sessionDuration <= windowEnd) {
       freeSlots.push(minutesToTime(slot));
-      slot += 70;
+      slot += 75; // 1 hour + 15 minutes buffer
     }
   }
 
   if (daySessions.length === 0) {
-    // Nenhuma sessão: slots de 8:00 até expediente
+    // No sessions: fill slots for the entire day
     fillSlotsInInterval(startExpediente, endExpediente);
   } else {
-    // Antes da primeira sessão
+    // Before the first session
     fillSlotsInInterval(startExpediente, daySessions[0].start - SESSION_BUFFER);
 
-    // Entre as sessões
+    // Between sessions
     for (let i = 0; i < daySessions.length - 1; i++) {
       const endCurr = daySessions[i].end;
       const startNext = daySessions[i + 1].start;
-      // Janela livre é: [endCurr+10, startNext-10]
       fillSlotsInInterval(endCurr + SESSION_BUFFER, startNext - SESSION_BUFFER);
     }
 
-    // Após a última sessão
+    // After the last session
     fillSlotsInInterval(daySessions[daySessions.length - 1].end + SESSION_BUFFER, endExpediente);
+
+    // **NEW LOGIC** Before each session, calculate previous free slots
+    for (let i = daySessions.length - 1; i >= 0; i--) {
+      const startCurr = daySessions[i].start;
+      fillSlotsInInterval(startCurr - sessionDuration - SESSION_BUFFER, startCurr - SESSION_BUFFER);
+    }
   }
 
-  // Adiciona horários personalizados, se houver para o dia
+  // Add custom slots if available
   const customSlots = getCustomSlotsForDate(date) || [];
   for (const custom of customSlots) {
     if (!freeSlots.includes(padTime(custom))) {
