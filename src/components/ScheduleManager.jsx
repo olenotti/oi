@@ -16,10 +16,6 @@ import { format, startOfWeek, addDays, parseISO, isValid, compareAsc } from "dat
 
 const SESSION_BUFFER = 15;
 
-const DEFAULT_START_HOUR = 8; // 8:00 AM
-const DEFAULT_END_WEEKDAY = 20 * 60 + 10; // 20:10 in minutes
-const DEFAULT_END_SATURDAY = 16 * 60 + 10; // 16:10 in minutes
-
 // --- Funções utilitárias ---
 
 function getTotalSessionsUsed(client, pkg, sessions) {
@@ -167,56 +163,59 @@ function getValidPeriodsForSlot(date, slot, sessions) {
 function getAvailableTimesForPeriod(date, sessions, _, period = "1h") {
   const d = new Date(date + "T00:00:00");
   const dow = d.getDay();
-  if (dow === 0 || dow > 6) return []; // No sessions on Sundays
-  const startExpediente = 480; // Start time in minutes (8:00 AM)
-  const endExpediente = dow === 6 ? DEFAULT_END_SATURDAY : DEFAULT_END_WEEKDAY; // End time varies by day
+  if (dow === 0 || dow > 6) return [];
+  const startExpediente = 480;
+  const endExpediente = [
+      20*60 + SESSION_BUFFER,
+      20*60 + SESSION_BUFFER,
+      20*60 + SESSION_BUFFER,
+      20*60 + SESSION_BUFFER,
+      20*60 + SESSION_BUFFER,
+      16*60 + SESSION_BUFFER
+    ][dow - 1];
+  const sessionDuration = getSessionDurationWithBuffer(period);
 
+  // Sessões ordenadas
   const daySessions = sessions
-    .filter((s) => s.date === date && (s.status === "scheduled" || s.status === "done"))
-    .map((s) => ({
+    .filter(s => s.date === date && (s.status === "scheduled" || s.status === "done"))
+    .map(s => ({
       ...s,
       start: timeToMinutes(s.time),
-      end: timeToMinutes(s.time) + getSessionDurationWithBuffer(s.period),
+      end: timeToMinutes(s.time) + getSessionDurationWithBuffer(s.period)
     }))
     .sort((a, b) => a.start - b.start);
 
   let freeSlots = [];
 
-  // Function to fill slots in a given interval
-  function fillSlotsInInterval(windowStart, windowEnd, reverse = false) {
+  // Função auxiliar para inserir slots em um intervalo de [start, end]
+  function fillSlotsInInterval(windowStart, windowEnd) {
     let slot = windowStart;
-    while (reverse ? slot >= windowEnd : slot + SESSION_BUFFER <= windowEnd) {
+    while (slot + sessionDuration <= windowEnd) {
       freeSlots.push(minutesToTime(slot));
-      slot += reverse ? -75 : 75; // Move backward or forward by 75 minutes
+      slot += 70;
     }
   }
 
   if (daySessions.length === 0) {
-    // No sessions: fill slots for the entire day
+    // Nenhuma sessão: slots de 8:00 até expediente
     fillSlotsInInterval(startExpediente, endExpediente);
   } else {
-    // Calculate previous free slots for each session
-    for (let i = 0; i < daySessions.length; i++) {
-      const startCurr = daySessions[i].start;
-      const prevSlotStart = startCurr - SESSION_BUFFER - 60;
-      fillSlotsInInterval(prevSlotStart, startExpediente, true); // Reverse to calculate previous slots
-    }
-
-    // Before the first session
+    // Antes da primeira sessão
     fillSlotsInInterval(startExpediente, daySessions[0].start - SESSION_BUFFER);
 
-    // Between sessions
+    // Entre as sessões
     for (let i = 0; i < daySessions.length - 1; i++) {
       const endCurr = daySessions[i].end;
       const startNext = daySessions[i + 1].start;
+      // Janela livre é: [endCurr+10, startNext-10]
       fillSlotsInInterval(endCurr + SESSION_BUFFER, startNext - SESSION_BUFFER);
     }
 
-    // After the last session
+    // Após a última sessão
     fillSlotsInInterval(daySessions[daySessions.length - 1].end + SESSION_BUFFER, endExpediente);
   }
 
-  // Add custom slots if available
+  // Adiciona horários personalizados, se houver para o dia
   const customSlots = getCustomSlotsForDate(date) || [];
   for (const custom of customSlots) {
     if (!freeSlots.includes(padTime(custom))) {
