@@ -169,11 +169,7 @@ function getAvailableTimesForPeriod(date, sessions, _, period = "1h") {
   const dow = d.getDay();
   if (dow === 0 || dow > 6) return []; // No sessions on Sundays
   const startExpediente = 480; // Start time in minutes (8:00 AM)
-  const endExpediente =
-    dow === 6 ? DEFAULT_END_SATURDAY : DEFAULT_END_WEEKDAY; // End time varies by day
-
-  const sessionDuration = getSessionDurationWithBuffer(period);
-  
+  const endExpediente = dow === 6 ? DEFAULT_END_SATURDAY : DEFAULT_END_WEEKDAY; // End time varies by day
 
   const daySessions = sessions
     .filter((s) => s.date === date && (s.status === "scheduled" || s.status === "done"))
@@ -187,11 +183,11 @@ function getAvailableTimesForPeriod(date, sessions, _, period = "1h") {
   let freeSlots = [];
 
   // Function to fill slots in a given interval
-  function fillSlotsInInterval(windowStart, windowEnd) {
+  function fillSlotsInInterval(windowStart, windowEnd, reverse = false) {
     let slot = windowStart;
-    while (slot + sessionDuration <= windowEnd) {
+    while (reverse ? slot >= windowEnd : slot + SESSION_BUFFER <= windowEnd) {
       freeSlots.push(minutesToTime(slot));
-      slot += 75; // 1 hour + 15 minutes buffer
+      slot += reverse ? -75 : 75; // Move backward or forward by 75 minutes
     }
   }
 
@@ -199,6 +195,13 @@ function getAvailableTimesForPeriod(date, sessions, _, period = "1h") {
     // No sessions: fill slots for the entire day
     fillSlotsInInterval(startExpediente, endExpediente);
   } else {
+    // Calculate previous free slots for each session
+    for (let i = 0; i < daySessions.length; i++) {
+      const startCurr = daySessions[i].start;
+      const prevSlotStart = startCurr - SESSION_BUFFER - 60;
+      fillSlotsInInterval(prevSlotStart, startExpediente, true); // Reverse to calculate previous slots
+    }
+
     // Before the first session
     fillSlotsInInterval(startExpediente, daySessions[0].start - SESSION_BUFFER);
 
@@ -211,12 +214,6 @@ function getAvailableTimesForPeriod(date, sessions, _, period = "1h") {
 
     // After the last session
     fillSlotsInInterval(daySessions[daySessions.length - 1].end + SESSION_BUFFER, endExpediente);
-
-    // **NEW LOGIC** Before each session, calculate previous free slots
-    for (let i = daySessions.length - 1; i >= 0; i--) {
-      const startCurr = daySessions[i].start;
-      fillSlotsInInterval(startCurr - sessionDuration - SESSION_BUFFER, startCurr - SESSION_BUFFER);
-    }
   }
 
   // Add custom slots if available
