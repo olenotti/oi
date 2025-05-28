@@ -16,6 +16,10 @@ import { format, startOfWeek, addDays, parseISO, isValid, compareAsc } from "dat
 
 const SESSION_BUFFER = 15;
 
+const DEFAULT_START_HOUR = 8; // 8:00 AM
+const DEFAULT_END_WEEKDAY = 20 * 60 + 10; // 20:10 in minutes
+const DEFAULT_END_SATURDAY = 16 * 60 + 10; // 16:10 in minutes
+
 // --- Funções utilitárias ---
 
 function getTotalSessionsUsed(client, pkg, sessions) {
@@ -169,6 +173,7 @@ function getAvailableTimesForPeriod(date, sessions, _, period = "1h") {
     dow === 6 ? DEFAULT_END_SATURDAY : DEFAULT_END_WEEKDAY; // End time varies by day
 
   const sessionDuration = getSessionDurationWithBuffer(period);
+  
 
   const daySessions = sessions
     .filter((s) => s.date === date && (s.status === "scheduled" || s.status === "done"))
