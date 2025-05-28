@@ -117,7 +117,7 @@ function getDefaultDaySlots(dow) {
   const end = dow === 5 ? 16 : 20; // Sábado até 16:10
   const slots = [];
   let minutes = start * 60;
-  const endMinutes = end * 60 + 15;
+  const endMinutes = end * 60 + SESSION_BUFFER;
   while (minutes <= endMinutes) {
     const hour = Math.floor(minutes / 60);
     const min = minutes % 60;
@@ -165,7 +165,14 @@ function getAvailableTimesForPeriod(date, sessions, _, period = "1h") {
   const dow = d.getDay();
   if (dow === 0 || dow > 6) return [];
   const startExpediente = 480;
-  const endExpediente = [1215, 1215, 1215, 1215, 1215, 975][dow - 1];
+  const endExpediente = [
+      20*60 + SESSION_BUFFER,
+      20*60 + SESSION_BUFFER,
+      20*60 + SESSION_BUFFER,
+      20*60 + SESSION_BUFFER,
+      20*60 + SESSION_BUFFER,
+      16*60 + SESSION_BUFFER
+    ][dow - 1];
   const sessionDuration = getSessionDurationWithBuffer(period);
 
   // Sessões ordenadas
@@ -194,18 +201,18 @@ function getAvailableTimesForPeriod(date, sessions, _, period = "1h") {
     fillSlotsInInterval(startExpediente, endExpediente);
   } else {
     // Antes da primeira sessão
-    fillSlotsInInterval(startExpediente, daySessions[0].start - 15);
+    fillSlotsInInterval(startExpediente, daySessions[0].start - SESSION_BUFFER);
 
     // Entre as sessões
     for (let i = 0; i < daySessions.length - 1; i++) {
       const endCurr = daySessions[i].end;
       const startNext = daySessions[i + 1].start;
       // Janela livre é: [endCurr+10, startNext-10]
-      fillSlotsInInterval(endCurr + 15, startNext - 15);
+      fillSlotsInInterval(endCurr + SESSION_BUFFER, startNext - SESSION_BUFFER);
     }
 
     // Após a última sessão
-    fillSlotsInInterval(daySessions[daySessions.length - 1].end + 15, endExpediente);
+    fillSlotsInInterval(daySessions[daySessions.length - 1].end + SESSION_BUFFER, endExpediente);
   }
 
   // Adiciona horários personalizados, se houver para o dia
