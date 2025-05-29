@@ -3,11 +3,12 @@ import {
   Box, Typography, Paper, Table, TableHead, TableRow, TableCell, TableBody,
   FormControl, InputLabel, Select, MenuItem, IconButton, TextField, Button
 } from "@mui/material";
-import { getSessions, getClients } from "../utils/storage";
-import { format, startOfWeek, addWeeks, addMonths, subMonths, startOfMonth, isSameMonth, isSameWeek, parseISO } from "date-fns";
+import { getClients } from "../utils/storage";
+import { format, addWeeks, addMonths, subMonths, startOfMonth, isSameMonth, isSameWeek, parseISO, isValid, compareAsc } from "date-fns";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import ArrowForwardIcon from "@mui/icons-material/ArrowForward";
 import DeleteIcon from "@mui/icons-material/Delete";
+import { getSessionsForPackage } from "../utils/packageUtils";
 
 // Tabela de valores dos pacotes
 const PACOTE_VALUES = {
@@ -29,6 +30,13 @@ const AVULSA_VALUES = {
   "2h": 290,
 };
 
+// Profissionais cadastrados no sistema
+const PROFISSIONAIS = [
+  "leticia",
+  "dani",
+  "bia"
+];
+
 // Entradas manuais: salva e carrega do localStorage
 const MANUAL_ENTRIES_KEY = "manual_entries";
 
@@ -46,6 +54,122 @@ function getMonday(date) {
   return new Date(d.setDate(diff));
 }
 
+// Função para buscar sessões de todos os profissionais + global + horários fixos
+function getAllSessions() {
+  let all = [];
+  // Global
+  const global = JSON.parse(localStorage.getItem("sessions") || "[]");
+  all = all.concat(global);
+  // Por profissional
+  for (const prof of PROFISSIONAIS) {
+    const profSessions = JSON.parse(localStorage.getItem(`sessions_${prof}`) || "[]");
+    all = all.concat(profSessions);
+  }
+  // Remove duplicadas (por id)
+  const seen = new Set();
+  return all.filter(s => {
+    if (!s.id) return false;
+    if (seen.has(s.id)) return false;
+    seen.add(s.id);
+    return true;
+  });
+}
+
+// Função centralizada para mostrar o número da sessão do pacote (igual ao PackageManager)
+function getPackageSessionDisplay(client, pkgId, allSessions, sessionId) {
+  if (!pkgId || !client) return "-";
+  const pkgObj = client.packages?.find(p => p.id === pkgId);
+  if (!pkgObj) return "-";
+  const total = getSessionsForPackage(pkgObj.name || "");
+  // Soma sessionsUsed (manual) + sessões "done" no sistema, ordenadas por data/hora
+  const sessionsUsedBase = pkgObj.sessionsUsed ?? 0;
+  // Junta todas as sessões do cliente/pacote (de qualquer origem), status "done", ordenadas
+  const sessions = allSessions
+    .filter(
+      s =>
+        s.clientId === client.id &&
+        s.packageId === pkgId &&
+        s.status === "done"
+    )
+    .sort((a, b) => {
+      const aDate = isValid(parseISO(a.date)) ? parseISO(a.date) : null;
+      const bDate = isValid(parseISO(b.date)) ? parseISO(b.date) : null;
+      if (!aDate && bDate) return 1;
+      if (aDate && !bDate) return -1;
+      if (!aDate && !bDate) return 0;
+      if (a.date !== b.date) return compareAsc(aDate, bDate);
+      if (a.time && b.time) {
+        return a.time.localeCompare(b.time);
+      }
+      if (a.time && !b.time) return -1;
+      if (!a.time && b.time) return 1;
+      return 0;
+    });
+  const idx = sessions.findIndex(s => s.id === sessionId);
+  if (idx === -1) return "-";
+  // Soma a base sessionsUsed ao índice atual (idx + 1)
+  return `${sessionsUsedBase + idx + 1}/${total}`;
+}
+
+// Remove sessão de todas as chaves (global e profissionais) e atualiza clients/pacotes se necessário
+function removeSessionEverywhere(sessId, clients, setClients) {
+  // Remove da chave global
+  let allSessions = JSON.parse(localStorage.getItem("sessions") || "[]");
+  allSessions = allSessions.filter(s => s.id !== sessId);
+  localStorage.setItem("sessions", JSON.stringify(allSessions));
+
+  // Remove de cada profissional
+  for (const prof of PROFISSIONAIS) {
+    let profSessions = JSON.parse(localStorage.getItem(`sessions_${prof}`) || "[]");
+    profSessions = profSessions.filter(s => s.id !== sessId);
+    localStorage.setItem(`sessions_${prof}`, JSON.stringify(profSessions));
+  }
+
+  // Atualiza clients/pacotes: se a sessão era de pacote, diminui sessionsUsed
+  let updatedClients = [...clients];
+  let sessionRemoved = null;
+  // Procurar a sessão removida para saber se era de pacote
+  for (const prof of PROFISSIONAIS) {
+    const profSessions = JSON.parse(localStorage.getItem(`sessions_${prof}`) || "[]");
+    const found = profSessions.find(s => s.id === sessId);
+    if (found) {
+      sessionRemoved = found;
+      break;
+    }
+  }
+  if (!sessionRemoved) {
+    // Tenta na global
+    const globalSessions = JSON.parse(localStorage.getItem("sessions") || "[]");
+    sessionRemoved = globalSessions.find(s => s.id === sessId);
+  }
+  if (sessionRemoved && sessionRemoved.packageId) {
+    const clientIdx = updatedClients.findIndex(c => c.id === sessionRemoved.clientId);
+    if (clientIdx !== -1 && Array.isArray(updatedClients[clientIdx].packages)) {
+      const pkgIdx = updatedClients[clientIdx].packages.findIndex(p => p.id === sessionRemoved.packageId);
+      if (pkgIdx !== -1) {
+        // Recalcula sessionsUsed para esse pacote (conta só as sessões "done" restantes)
+        // Busca todas as sessões desse cliente/pacote
+        let allSess = [];
+        for (const prof of PROFISSIONAIS) {
+          const profSessions = JSON.parse(localStorage.getItem(`sessions_${prof}`) || "[]");
+          allSess = allSess.concat(profSessions);
+        }
+        allSess = allSess.concat(JSON.parse(localStorage.getItem("sessions") || "[]"));
+        const used = allSess.filter(
+          s =>
+            s.clientId === sessionRemoved.clientId &&
+            s.packageId === sessionRemoved.packageId &&
+            s.status === "done" &&
+            s.id !== sessId // já removida
+        ).length;
+        updatedClients[clientIdx].packages[pkgIdx].sessionsUsed = used;
+      }
+    }
+    setClients(updatedClients);
+    localStorage.setItem("clients", JSON.stringify(updatedClients));
+  }
+}
+
 export default function ControleAtendimentosView() {
   const [sessions, setSessions] = useState([]);
   const [clients, setClients] = useState([]);
@@ -58,11 +182,11 @@ export default function ControleAtendimentosView() {
   const [manualDesc, setManualDesc] = useState("");
 
   useEffect(() => {
-    setSessions(getSessions());
+    setSessions(getAllSessions());
     setClients(getClients());
     setManualEntries(getManualEntries());
     const handler = () => {
-      setSessions(getSessions());
+      setSessions(getAllSessions());
       setClients(getClients());
       setManualEntries(getManualEntries());
     };
@@ -89,7 +213,7 @@ export default function ControleAtendimentosView() {
     return pkgs;
   }
 
-  // Sessões avulsas realizadas no período
+  // Sessões avulsas realizadas no período (pega sessions marcadas como isAvulsa)
   function getAvulsasInPeriod(sessions, periodCheck, clients) {
     return sessions
       .filter(s => s.status === "done" && s.isAvulsa && s.date && periodCheck(s.date))
@@ -124,14 +248,7 @@ export default function ControleAtendimentosView() {
   const avulsasDone = getAvulsasInPeriod(sessions, tab === "mes" ? checkMonth : checkWeek, clients);
   const manualDone = getManualInPeriod(manualEntries, tab === "mes" ? checkMonth : checkWeek);
 
-  // Soma total
-  const totalEntrada = [
-    ...newPackages.map(e => e.value),
-    ...avulsasDone.map(e => e.value),
-    ...manualDone.map(e => e.value)
-  ].reduce((a, b) => a + b, 0);
-
-  // Para tabela de sessões realizadas
+  // Para tabela de sessões realizadas (agora pega todas as sessões realizadas, inclusive avulsas, de pacote e de horário fixo)
   const sessionsRealizadas = sessions.filter(
     s => s.status === "done"
   );
@@ -141,6 +258,13 @@ export default function ControleAtendimentosView() {
   const sessionsDaSemana = sessionsRealizadas.filter(s =>
     isSameWeek(parseISO(s.date), currentWeek, { weekStartsOn: 1 })
   );
+
+  // Soma total
+  const totalEntrada = [
+    ...newPackages.map(e => e.value),
+    ...avulsasDone.map(e => e.value),
+    ...manualDone.map(e => e.value)
+  ].reduce((a, b) => a + b, 0);
 
   // Adicionar entrada manual
   function handleAddManualEntry() {
@@ -168,7 +292,13 @@ export default function ControleAtendimentosView() {
   function handleRemoveAvulsa(id) {
     const updated = sessions.filter(s => s.id !== id);
     setSessions(updated);
+    // Remove de todas as chaves possíveis
     localStorage.setItem("sessions", JSON.stringify(updated));
+    for (const prof of PROFISSIONAIS) {
+      const profSessions = JSON.parse(localStorage.getItem(`sessions_${prof}`) || "[]");
+      const filtered = profSessions.filter(s => s.id !== id);
+      localStorage.setItem(`sessions_${prof}`, JSON.stringify(filtered));
+    }
   }
 
   // Remover pacote novo do controle (tira flag isNew do pacote, diminui saldo)
@@ -183,6 +313,14 @@ export default function ControleAtendimentosView() {
     });
     setClients(updatedClients);
     localStorage.setItem("clients", JSON.stringify(updatedClients));
+  }
+
+  // Remover sessão realizada (remove de todas as chaves e atualiza clients/pacotes)
+  function handleRemoveRealizada(sessId) {
+    if (!window.confirm("Remover este atendimento? Isso irá desfazer o registro da sessão.")) return;
+    removeSessionEverywhere(sessId, clients, setClients);
+    // Atualiza lista local
+    setSessions(getAllSessions());
   }
 
   // Para mudar mês/semana
@@ -323,9 +461,14 @@ export default function ControleAtendimentosView() {
       </Paper>
 
       <Paper sx={{ p: 2 }}>
-        <Typography variant="h6" sx={{ mb: 2 }}>
-          {tab === "mes" ? "Atendimentos realizados no mês" : "Atendimentos realizados na semana"}
-        </Typography>
+        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 2 }}>
+          <Typography variant="h6">
+            {tab === "mes" ? "Atendimentos realizados no mês" : "Atendimentos realizados na semana"}
+          </Typography>
+          <Typography variant="h6" sx={{ color: "green", fontWeight: 700 }}>
+            {(tab === "mes" ? sessionsDoMes : sessionsDaSemana).length}
+          </Typography>
+        </Box>
         <Table size="small">
           <TableHead>
             <TableRow>
@@ -334,7 +477,9 @@ export default function ControleAtendimentosView() {
               <TableCell>Cliente</TableCell>
               <TableCell>Tipo</TableCell>
               <TableCell>Período</TableCell>
+              <TableCell>Pacote</TableCell>
               <TableCell>Observações</TableCell>
+              <TableCell>Ação</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -347,12 +492,32 @@ export default function ControleAtendimentosView() {
                   <TableCell>{getClientName(sess.clientId)}</TableCell>
                   <TableCell>{sess.massageType}</TableCell>
                   <TableCell>{sess.period}</TableCell>
+                  <TableCell>
+                    {sess.packageId
+                      ? getPackageSessionDisplay(
+                          clients.find(c => c.id === sess.clientId),
+                          sess.packageId,
+                          sessions,
+                          sess.id
+                        )
+                      : "-"}
+                  </TableCell>
                   <TableCell>{sess.notes || "-"}</TableCell>
+                  <TableCell>
+                    <IconButton
+                      size="small"
+                      color="error"
+                      onClick={() => handleRemoveRealizada(sess.id)}
+                      title="Remover atendimento"
+                    >
+                      <DeleteIcon />
+                    </IconButton>
+                  </TableCell>
                 </TableRow>
               ))}
             {(tab === "mes" ? sessionsDoMes : sessionsDaSemana).length === 0 && (
               <TableRow>
-                <TableCell colSpan={6} align="center">Nenhum atendimento realizado</TableCell>
+                <TableCell colSpan={8} align="center">Nenhum atendimento realizado</TableCell>
               </TableRow>
             )}
           </TableBody>

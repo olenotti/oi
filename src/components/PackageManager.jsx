@@ -9,9 +9,33 @@ import {
   getPackagesList,
   getSessionsForPackage,
   generatePackageId,
-  isIndividualPackageExpired
+  isIndividualPackageExpired,
+  getPackageSessionNumber
 } from "../utils/packageUtils";
-import { getSessions } from "../utils/storage";
+
+// Função para buscar todas as sessões do sistema (global + profissionais)
+function getAllSessions() {
+  let all = [];
+  const global = JSON.parse(localStorage.getItem("sessions") || "[]");
+  all = all.concat(global);
+  const PROFISSIONAIS = [
+    { label: "Letícia", value: "leticia" },
+    { label: "Dani", value: "dani" },
+    { label: "Bia", value: "bia" }
+  ];
+  for (const prof of PROFISSIONAIS) {
+    const profSessions = JSON.parse(localStorage.getItem(`sessions_${prof.value}`) || "[]");
+    all = all.concat(profSessions);
+  }
+  // Remove duplicadas (por id)
+  const seen = new Set();
+  return all.filter(s => {
+    if (!s.id) return false;
+    if (seen.has(s.id)) return false;
+    seen.add(s.id);
+    return true;
+  });
+}
 
 // Função para calcular dinamicamente o total de sessões usadas
 function getTotalSessionsUsed(client, pkg, sessions) {
@@ -41,15 +65,21 @@ export default function PackageManager() {
   // NOVO: Flag para saber se é um pacote novo (entrada financeira)
   const [addIsNew, setAddIsNew] = useState(false);
 
+  // --- ATUALIZAÇÃO: sempre buscar todas as sessões do sistema ---
+  const [allSessions, setAllSessions] = useState(getAllSessions());
+
   useEffect(() => {
     setClients(getClients());
-    setSessions(getSessions());
+    setSessions(getAllSessions());
+    setAllSessions(getAllSessions());
     const handler = () => {
       setClients(getClients());
-      setSessions(getSessions());
+      setSessions(getAllSessions());
+      setAllSessions(getAllSessions());
     };
     window.addEventListener("storage", handler);
     return () => window.removeEventListener("storage", handler);
+    // eslint-disable-next-line
   }, []);
 
   // Atualiza pacotes encerrados para sempre refletirem em ClientManager
@@ -176,8 +206,8 @@ export default function PackageManager() {
             name: addPackage,
             validity: addValidity,
             sessionsUsed: addSessionsUsed,
-            isNew: !!addIsNew, // <- salva flag!
-            newAssignedAt: addIsNew ? new Date().toISOString().slice(0, 10) : undefined // <- salva data
+            isNew: !!addIsNew,
+            newAssignedAt: addIsNew ? new Date().toISOString().slice(0, 10) : undefined
           }
         ];
         return {
@@ -199,6 +229,44 @@ export default function PackageManager() {
     setAddSessionsUsed(0);
     setAddIsNew(false);
   };
+
+  function renderSessionsColumn(client, pkg) {
+    // Busca todas as sessões scheduled/done deste cliente/pacote
+    const sessionsList = allSessions
+      .filter(
+        s =>
+          s.clientId === client.id &&
+          s.packageId === pkg.id &&
+          (s.status === "scheduled" || s.status === "done")
+      )
+      .sort((a, b) => {
+        if (a.date !== b.date) return a.date.localeCompare(b.date);
+        if (a.time && b.time) return a.time.localeCompare(b.time);
+        if (a.time && !b.time) return -1;
+        if (!a.time && b.time) return 1;
+        return 0;
+      });
+
+    if (sessionsList.length === 0) {
+      return `${getTotalSessionsUsed(client, pkg, allSessions)} / ${getSessionsForPackage(pkg.name)}`;
+    }
+
+    // Mostra lista de sessões com número e status correto
+    return (
+      <Box>
+        <Typography variant="body2" sx={{ fontWeight: 500 }}>
+          {getTotalSessionsUsed(client, pkg, allSessions)} / {getSessionsForPackage(pkg.name)}
+        </Typography>
+        <ul style={{ margin: 0, paddingLeft: 16 }}>
+          {sessionsList.map(sess => (
+            <li key={sess.id}>
+              Sessão {getPackageSessionNumber(client, pkg.id, allSessions, sess.id)} — {sess.date} {sess.time} ({sess.status === "done" ? "Realizada" : "Agendada"})
+            </li>
+          ))}
+        </ul>
+      </Box>
+    );
+  }
 
   return (
     <Box>
@@ -231,7 +299,7 @@ export default function PackageManager() {
               <TableCell>{pkg.id}</TableCell>
               <TableCell>{pkg.name}</TableCell>
               <TableCell>
-                {getTotalSessionsUsed(client, pkg, sessions)} / {getSessionsForPackage(pkg.name)}
+                {renderSessionsColumn(client, pkg)}
               </TableCell>
               <TableCell>{pkg.validity || "-"}</TableCell>
               <TableCell>
@@ -282,7 +350,7 @@ export default function PackageManager() {
               <TableCell>{pkg.id}</TableCell>
               <TableCell>{pkg.name}</TableCell>
               <TableCell>
-                {getTotalSessionsUsed(client, pkg, sessions)} / {getSessionsForPackage(pkg.name)}
+                {renderSessionsColumn(client, pkg)}
               </TableCell>
               <TableCell>{pkg.validity || "-"}</TableCell>
               <TableCell>
